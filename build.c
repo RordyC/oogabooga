@@ -50,8 +50,8 @@ typedef struct Context_Extra {
 // #include "oogabooga/examples/window_test.c"
 // #include "oogabooga/examples/offscreen_drawing.c"
 // #include "oogabooga/examples/threaded_drawing.c"
-#include "oogabooga/examples/bloom.c"
-
+//#include "oogabooga/examples/bloom.c"
+#include "game.c"
 // These examples require some extensions to be enabled. See top respective files for more info.
 // #include "oogabooga/examples/particles_example.c" // Requires OOGABOOGA_EXTENSION_PARTICLES
 
