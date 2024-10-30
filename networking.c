@@ -47,7 +47,6 @@ typedef struct{
 #define MAX_CLIENTS 1
 
 typedef struct{
-    bool active;
     address clientAddress;
     uint64_t clientSalt;
     uint64_t serverSalt;
@@ -62,6 +61,7 @@ typedef struct {
     double clientsLastPacketRecievedTime[MAX_CLIENTS];
     address clientsAddress[MAX_CLIENTS];
     pendingClientConnection pendingConnections[MAX_CLIENTS];
+    int pendingConnectionsCount;
     address serverAddress;
     SOCKET serverSocket;
 } server;
@@ -183,15 +183,17 @@ int serverFindClientIndex(server * server, address addr)
 #define SERVER_CONNECTION_TIMEOUT_TIME 4
 void serverCheckPendingConnectionsTimeout(server * SERVER)
 {
-    for (int i = 0; i < SERVER->maxClients; i++)
+    for (int i = 0; i < SERVER->pendingConnectionsCount; i++)
     {
         pendingClientConnection * connection = &(SERVER->pendingConnections[i]);
-        if (connection->active)
-        { 
-            if (SERVER->time > (connection->timeSinceRequest + SERVER_CONNECTION_TIMEOUT_TIME)) 
+        if (SERVER->time > (connection->timeSinceRequest + SERVER_CONNECTION_TIMEOUT_TIME)) 
+        {
+            // "Remove Connection" (shift elements if needed)
+            for (int j = i + 1; j < SERVER->pendingConnectionsCount; i++)
             {
-                connection->active = 0;
+                SERVER->pendingConnections[i] = SERVER->pendingConnections[j];
             }
+            SERVER->pendingConnectionsCount--;
         }
     }
 }
@@ -237,41 +239,53 @@ void serverProcessPacket(server * server, address from, void * payload, unsigned
             }
             else // Find/add pending connection.
             {
-                uint64_t clientSalt = *((uint64_t*)(((u8*)payload) + 8));
-                for (int i = 0; i < server->maxClients; i++)
+                uint64_t clientSalt = *((uint64_t*)(((u8*)payload) + 1));
+                for (int i = 0; i < server->pendingConnectionsCount; i++)
                 {
                     pendingClientConnection * pendingConn = &server->pendingConnections[i];
-                    if (pendingConn->active)
+                        // Check for matching address + salt.
+                    if (addressEqual(pendingConn->clientAddress, from) && pendingConn->clientSalt == clientSalt)
                     {
-                        // Check for matching address + salt.     
-                        if (addressEqual(pendingConn->clientAddress, from) && pendingConn->clientSalt == clientSalt)
-                        {
-                            // Send challenge packet AGAIN.                            
-                        }
+                        // Resend challenge packet to client.
+                        break;
                     }
                 }
-
-                for (int i = 0; i < server->maxClients; i++)
+                if (server->pendingConnectionsCount == server->maxClients)
                 {
-                    pendingClientConnection * pendingConn = &server->pendingConnections[i];
-                    if (!pendingConn->active)
-                    {
-                        pendingConn->clientAddress = from;
-                        pendingConn->clientSalt = clientSalt;
-                        pendingConn->active = 1;
-                        pendingConn->timeSinceRequest = server->time;
-                        // GENERATE RANDOM SERVER SALT.
-                        // SEND CHALLENGE PACKET.
-                    }
+                    // Send connection denied (max connection requests).
+                    break;
                 }
 
-
-                // No room in pending connections data structure.
+                pendingClientConnection * pendingConn = &server->pendingConnections[server->pendingConnectionsCount];
+                pendingConn->clientAddress = from;
+                pendingConn->clientSalt = clientSalt;
+                pendingConn->timeSinceRequest = server->time;
+                // GENERATE RANDOM SERVER SALT. pendingConn->serverSalt = ???
+                // SEND CHALLENGE PACKET.
             }
             break;
         case RESPONSE:
             // Process connection response packet:
+            uint64_t clientSalt = *((uint64_t*)(((u8*)payload) + 1));
+            uint64_t serverSalt = *((uint64_t*)(((u8*)payload) + 1 + 8));
 
+            // Check if already connected
+            int existingClientIndex = serverFindClientIndex(server, from);
+            if (existingClientIndex >= 0)
+            {
+                printf("SERVER: Client (%d) already connected, resending connection accepted packet.\n", existingClientIndex);
+                // Send connection denied (already connected) packet.
+            }
+
+            for (int i = 0; i < server->pendingConnectionsCount; i++)
+            {
+                pendingClientConnection * pendingConn = server->pendingConnections[i];
+                if (addressEqual(pendingConn->clientAddress, from) && pendingConn->clientSalt == clientSalt && pendingConn->serverSalt == serverSalt)
+                {
+                    // SEND CONNECTION ACCEPTED PACKET FINALLY.
+                    // remove pending conn from thing.
+                }
+            }
             break;
         default:
             break;
@@ -327,6 +341,7 @@ server startServer(address serverAddress, unsigned int maxConnections)
     newServer.maxClients = maxConnections;
     newServer.serverAddress = serverAddress;
     newServer.serverSocket = createSocketUDP(serverAddress);
+    newServer.pendingConnectionsCount = 0;
     printf("SERVER STARTED.\n");
     return newServer;
 }
