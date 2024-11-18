@@ -4,7 +4,6 @@ typedef struct {
     addressType type;
     union {uint8_t ipv4[4]; uint16_t ipv6[8];} data;
     unsigned short port;
-
 } address;
 
 const uint32_t ProtocolID = 0x27052004;
@@ -13,23 +12,24 @@ typedef enum
 {
     UNRELIABLE,
     CONNECT,
-    RESPONSE,
+    PACKET_CHALLENGE,
+    PACKET_RESPONSE,
     REJECT,
-    HEARTBEAT,
+    PACKET_HEARTBEAT,
     DISCONNECT,
     NUM_PACKET_TYPES
 } PacketType;
 
 typedef struct{
-    u8 protocolID;
     PacketType type;
     u32 size;
+    void * data;
 } packet;
 
 typedef struct{
     PacketType type;
     uint64_t clientSalt;
-    u8 padding[512];
+    u8 padding[500];
 } connectionRequestPacket;
 
 typedef struct{
@@ -65,23 +65,6 @@ typedef struct {
     address serverAddress;
     SOCKET serverSocket;
 } server;
-
-typedef enum {
-   CLIENT_DISCONNECTED,
-   CLIENT_REQUESTING_CONNECTION,
-   CLIENT_SENDING_CHALLENGE_RESPONSE,
-   CLIENT_CONNECTED,
-} clientState;
-
-typedef struct {
-    SOCKET clientSocket;
-    uint64_t clientSalt;
-    uint64_t serverSalt;
-    double lastPacketSendTime;
-    double lastPacketRecieveTime;
-    address serverAddress;
-    clientState state;
-} client;
 
 SOCKET createSocketUDP(address addr)
 {
@@ -135,7 +118,11 @@ SOCKET createSocketUDP(address addr)
 
 address addressIPV4(char * addressStr, unsigned short port)
 {
-    unsigned long addr = ntohl(inet_addr(addressStr));
+    // unsigned long addr = ntohl(inet_addr(addressStr)); NOTE: inet_addr function is deprecated when using Winsock2.
+    unsigned long addr;
+    inet_pton(AF_INET, addressStr, &addr);
+    addr = ntohl(addr);
+
     if (addr != -1)
     {
         return (address){ADDRESS_IPV4, {addr >> 24, addr >> 16 & 0xFF, addr >> 8 & 0xFF, addr & 0xFF}, port};
@@ -167,6 +154,145 @@ int addressEqual(address a, address b)
         return 1;
     }
     return 0;
+}
+
+uint64_t generateSalt()
+{
+    return  (((uint64_t)rand() <<  0) & 0x000000000000FFFFull) |
+            (((uint64_t)rand() << 16) & 0x00000000FFFF0000ull) |
+            (((uint64_t)rand() << 32) & 0x0000FFFF00000000ull) |
+            (((uint64_t)rand() << 48) & 0xFFFF000000000000ull);
+}
+
+void socketSend(SOCKET socket, char * packetData, unsigned int packetSize, address addr)
+{
+    unsigned int ipv4 = (addr.data.ipv4[0] << 24) |
+                        (addr.data.ipv4[1] << 16) |
+                        (addr.data.ipv4[2] << 8 ) |
+                        (addr.data.ipv4[3]);
+
+    struct sockaddr_in socketAddress;
+    socketAddress.sin_family = AF_INET;
+    socketAddress.sin_addr.s_addr = htonl(ipv4);
+    socketAddress.sin_port = htons(addr.port);
+
+   int sentBytes = sendto(socket, 
+                (const char*)packetData, 
+                packetSize,
+                0, 
+                (SOCKADDR*)&socketAddress, 
+                sizeof(SOCKADDR));
+    
+    assert(sentBytes == packetSize)
+}
+
+typedef struct{
+    void * data;
+    int size;
+    int index;
+} buffer;
+
+
+void writeU32(buffer * buf, uint32_t value)
+{
+    assert(buf->index + sizeof(uint32_t) <= buf->size);
+    *((uint32_t*)(buf->data + buf->index)) = htonl(value); 
+    buf->index += sizeof(uint32_t);
+}
+
+int readInteger(buffer * buf)
+{
+    assert(buf->index + 4 <= buf->size);
+
+    uint32_t value = *((uint32_t*)(buf->data + buf->index));
+    #ifdef BIG_ENDIAN
+        value = bswap(value)
+    #else // #ifdef BIG_ENDIAN
+       // Do nothing
+    #endif // #ifdef BIG_ENDIAN
+     
+    buf->index += 4;
+    return value;
+}
+
+void writeU8(buffer * buf, uint8_t value)
+{
+    assert( buf->index + sizeof(uint8_t) <= buf->size)
+    *((uint8_t*)(buf->data + buf->index)) = value;
+    buf->index += sizeof(uint8_t);
+}
+
+void writeU64(buffer * buf, uint64_t value)
+{
+    htonl(0);
+    assert( buf->index + sizeof(uint64_t) <= buf->size)
+    *((uint64_t*)(buf->data + buf->index)) = htonll(value);
+    buf->index += sizeof(uint64_t);
+}
+
+u_int64 readU64(void * data)
+{
+    return ntohll(*((uint64_t*)((u8*)data)));
+}
+
+packet createConnectionRequestPacket(u32 protocolID, uint64_t clientSalt)
+{
+    void * data = alloc(get_heap_allocator(), 512);
+    buffer buf = {data, 512, 0};
+
+    writeU32(&buf, protocolID); // TODO: CRC32
+    writeU8(&buf, CONNECT);     // Packet Type
+    writeU64(&buf, clientSalt); // Client Salt
+
+    for (int i = 0; i < 499; i++)
+    {
+        writeU8(&buf, 0xF);
+    }
+
+    return (packet){CONNECT, 512, data};
+}
+
+packet createServerChallengePacket(u32 protocolID, uint64_t clientSalt, uint64_t serverSalt)
+{
+    void * data = alloc(get_heap_allocator(), 21);
+    buffer buf = {data, 21, 0};
+
+    writeU32(&buf, protocolID);      // TODO: CRC32
+    writeU8(&buf, PACKET_CHALLENGE); // Packet Type
+    writeU64(&buf, clientSalt);      // Client Salt
+    writeU64(&buf, serverSalt);      // Server Salt
+
+    return (packet){PACKET_CHALLENGE, buf.size, data};
+}
+
+packet createChallengeResponsePacket(uint32_t protocolID, uint64_t salts)
+{
+    void * data = alloc(get_heap_allocator(), 512);
+    buffer buf = {data, 512, 0};
+
+    writeU32(&buf, protocolID);      // TODO: CRC32
+    writeU8(&buf, PACKET_RESPONSE);  // Packet Type
+    writeU64(&buf, salts);           // XOR of client and server salts
+
+    // Fill the rest of the buffer with 1s
+    for (int i = buf.index; i < buf.size; i++)
+    {
+        writeU8(&buf, 0xF);
+    }
+
+    return (packet){PACKET_RESPONSE, buf.size, data};
+}
+
+packet createHeartbeatPacket(u32 protocolID, uint64_t salts)
+{
+    void * data = alloc(get_heap_allocator(), 13);
+    buffer buf = {data, 13, 0};
+
+    writeU32(&buf, protocolID);      // TODO: CRC32
+    writeU8(&buf, PACKET_HEARTBEAT); // Packet Type
+    writeU64(&buf, salts);           // XOR of client and server salts
+
+    return (packet){PACKET_HEARTBEAT, buf.size, data};
 }
 
 int serverFindClientIndex(server * server, address addr)
@@ -213,73 +339,90 @@ void serverProcessChallengeResponsePacket(server * SERVER, address from, void * 
         }
     }
 }
+
+void serverProcessConnectPacket(server * SERVER, address from, void * payload, unsigned int size)
+{
+    printf("SERVER: Received CONNECT Packet from (%d.%d.%d.%d):%d\n",
+           from.data.ipv4[0], from.data.ipv4[1], from.data.ipv4[2], from.data.ipv4[3],
+           from.port);
+
+    // Check if client is already connected.
+    int existingClientIndex = serverFindClientIndex(SERVER, from);
+    if (existingClientIndex >= 0)
+    {
+        printf("SERVER: Client (%d) already connected, denying connection.\n", existingClientIndex);
+        // Send connection denied (already connected) packet.
+    }
+
+    // Send reject packet if server is full.
+    if (SERVER->numClientsConnected == SERVER->maxClients)
+    {
+        printf("SERVER: Server full, denying connection.\n", existingClientIndex);
+        // Send connection denied (server full) packet.
+    }
+    else // Find/add pending connection.
+    {
+        uint64_t clientSalt = readU64((u8*)payload + 1);
+        for (int i = 0; i < SERVER->pendingConnectionsCount; i++)
+        {
+            pendingClientConnection * pendingConn = &SERVER->pendingConnections[i];
+            // Check for matching address + salt.
+            if (addressEqual(pendingConn->clientAddress, from) && pendingConn->clientSalt == clientSalt)
+            {
+                // Resend challenge packet to client.
+                printf("SERVER: Resending challenge packet.\n");
+                packet challengePacket = createServerChallengePacket(ProtocolID, pendingConn->clientSalt, pendingConn->serverSalt);
+                socketSend(SERVER->serverSocket, challengePacket.data, challengePacket.size, pendingConn->clientAddress);
+                dealloc(get_heap_allocator(), challengePacket.data);
+                return;
+            }
+        }
+
+        if (SERVER->pendingConnectionsCount == SERVER->maxClients)
+        {
+            // Send connection denied (max connection requests).
+            return;
+        }
+
+        pendingClientConnection * pendingConn = &SERVER->pendingConnections[SERVER->pendingConnectionsCount];
+        pendingConn->clientAddress = from;
+        pendingConn->clientSalt = clientSalt;
+        pendingConn->timeSinceRequest = SERVER->time;
+        pendingConn->serverSalt = generateSalt();
+        SERVER->pendingConnectionsCount++;
+
+        printf("SERVER: Sending challenge packet.\n");
+        packet challengePacket = createServerChallengePacket(ProtocolID, pendingConn->clientSalt, pendingConn->serverSalt);
+        socketSend(SERVER->serverSocket, challengePacket.data, challengePacket.size, pendingConn->clientAddress);
+        dealloc(get_heap_allocator(), challengePacket.data);
+        // SEND CHALLENGE PACKET.
+    }
+}
+
 void serverProcessPacket(server * server, address from, void * payload, unsigned int size)
 {
     PacketType type = *((u8*)payload);
     switch (type)
     {
         case CONNECT:
-            printf("SERVER: Received CONNECT Packet from (%d.%d.%d.%d):%d\n",
-                from.data.ipv4[0], from.data.ipv4[1], from.data.ipv4[2], from.data.ipv4[3],
-                from.port);
-            
-            // Check if client is already connected.
-            int existingClientIndex = serverFindClientIndex(server, from);
-            if (existingClientIndex >= 0)
-            {
-                printf("SERVER: Client (%d) already connected, denying connection.\n", existingClientIndex);
-                // Send connection denied (already connected) packet.
-            }
-
-            // Send reject packet if server is full.
-            if (server->numClientsConnected == server->maxClients)
-            {
-                printf("SERVER: Server full, denying connection.\n", existingClientIndex);
-                // Send connection denied (server full) packet.
-            }
-            else // Find/add pending connection.
-            {
-                uint64_t clientSalt = *((uint64_t*)(((u8*)payload) + 1));
-                for (int i = 0; i < server->pendingConnectionsCount; i++)
-                {
-                    pendingClientConnection * pendingConn = &server->pendingConnections[i];
-                        // Check for matching address + salt.
-                    if (addressEqual(pendingConn->clientAddress, from) && pendingConn->clientSalt == clientSalt)
-                    {
-                        // Resend challenge packet to client.
-                        break;
-                    }
-                }
-                if (server->pendingConnectionsCount == server->maxClients)
-                {
-                    // Send connection denied (max connection requests).
-                    break;
-                }
-
-                pendingClientConnection * pendingConn = &server->pendingConnections[server->pendingConnectionsCount];
-                pendingConn->clientAddress = from;
-                pendingConn->clientSalt = clientSalt;
-                pendingConn->timeSinceRequest = server->time;
-                // GENERATE RANDOM SERVER SALT. pendingConn->serverSalt = ???
-                // SEND CHALLENGE PACKET.
-            }
+            serverProcessConnectPacket(server, from, payload, size);
             break;
-        case RESPONSE:
+        case PACKET_RESPONSE:
             // Process connection response packet:
-            uint64_t clientSalt = *((uint64_t*)(((u8*)payload) + 1));
-            uint64_t serverSalt = *((uint64_t*)(((u8*)payload) + 1 + 8));
+            uint64_t clientSalt = readU64((u8*)payload + 1);
+            uint64_t serverSalt = readU64((u8*)payload + 1 + 8);
 
             // Check if already connected
-            int existingClientIndex = serverFindClientIndex(server, from);
-            if (existingClientIndex >= 0)
+            int index = serverFindClientIndex(server, from);
+            if (index >= 0)
             {
-                printf("SERVER: Client (%d) already connected, resending connection accepted packet.\n", existingClientIndex);
+                printf("SERVER: Client (%d) already connected, resending connection accepted packet.\n", index);
                 // Send connection denied (already connected) packet.
-            }
+            };
 
             for (int i = 0; i < server->pendingConnectionsCount; i++)
             {
-                pendingClientConnection * pendingConn = server->pendingConnections[i];
+                pendingClientConnection * pendingConn = &server->pendingConnections[i];
                 if (addressEqual(pendingConn->clientAddress, from) && pendingConn->clientSalt == clientSalt && pendingConn->serverSalt == serverSalt)
                 {
                     // SEND CONNECTION ACCEPTED PACKET FINALLY.
@@ -288,6 +431,7 @@ void serverProcessPacket(server * server, address from, void * payload, unsigned
             }
             break;
         default:
+            printf("SERVER: Invalid packet type recieved.\n", index);
             break;
     }
 }
@@ -296,7 +440,7 @@ void serverRecieve(server * Server)
 {
     while ( true )
     {
-        unsigned char packetData[128];
+        unsigned char packetData[1024];
         unsigned int maxPacketSize = sizeof(packetData);
 
         struct sockaddr_in from;
@@ -309,11 +453,11 @@ void serverRecieve(server * Server)
                               (SOCKADDR*)&from, 
                               &fromLength);
 
-        if ( bytes <= 0 )
+            if ( bytes <= 0 )
             break;
 
         // Check protocol ID.
-        uint32_t protocol = *(uint32_t*)&packetData[0];
+        uint32_t protocol = ntohl(*(uint32_t*)&packetData[0]);
         if (protocol == ProtocolID)
         {
             // Process packet.
@@ -351,132 +495,4 @@ void serverUpdate(server * SERVER, double time)
     serverCheckPendingConnectionsTimeout(SERVER);
     
     serverRecieve(SERVER);
-}
-
-client startClient(address clientAddress)
-{
-    client newClient;
-    newClient.clientSocket = createSocketUDP(clientAddress);
-    newClient.state = CLIENT_DISCONNECTED;
-
-    printf("CLIENT STARTED.\n");
-    return newClient;
-}
-
-void clientConnect(client * CLIENT, address serverAddress)
-{
-    assert(CLIENT->state == CLIENT_DISCONNECTED);
-    CLIENT->clientSalt = 0xDEADBEEF;
-    CLIENT->state = CLIENT_REQUESTING_CONNECTION;
-    CLIENT->serverAddress = serverAddress;
-}
-
-void clientUpdate(client * CLIENT, double time)
-{
-    // Start recieving stuff/process packets.
-    // clientReceive(CLIENT);
-    switch (CLIENT->state)
-    {
-        case CLIENT_REQUESTING_CONNECTION:
-            // Check if time since last packet is greater than connection request resend rate.
-            if (CLIENT->lastPacketRecieveTime > 5)
-            {
-                // timeout
-            }
-
-            if (CLIENT->lastPacketSendTime >= 0.1)
-            {
-                // send packet again!
-            }
-            break;
-        case CLIENT_SENDING_CHALLENGE_RESPONSE:
-            if (CLIENT->lastPacketRecieveTime > 5)
-            {
-                // timeout
-            }
-            if (CLIENT->lastPacketSendTime >= 0.1)
-            {
-                // send packet again!
-            }
-            break;
-        case CLIENT_CONNECTED:
-            
-            break;
-        default:
-            break;
-    }
-}
-
-void socketSend(SOCKET socket, char * packetData, unsigned int packetSize, address addr)
-{
-    unsigned int ipv4 = (addr.data.ipv4[0] << 24) |
-                        (addr.data.ipv4[1] << 16) |
-                        (addr.data.ipv4[2] << 8 ) |
-                        (addr.data.ipv4[3]);
-
-    struct sockaddr_in socketAddress;
-    socketAddress.sin_family = AF_INET;
-    socketAddress.sin_addr.s_addr = htonl(ipv4);
-    socketAddress.sin_port = htons(addr.port);
-
-   int sentBytes = sendto(socket, 
-                (const char*)packetData, 
-                packetSize,
-                0, 
-                (SOCKADDR*)&socketAddress, 
-                sizeof(SOCKADDR));
-    
-    assert(sentBytes == packetSize)
-}
-
-void clientProcessPacket(client * CLIENT, void * packet, int size)
-{
-
-}
-void clientRecieve(client * CLIENT)
-{
-       
-}
-
-typedef struct{
-    void * data;
-    int size;
-    int index;
-} buffer;
-
-
-void writeInteger(buffer * buf, u32 value)
-{
-    assert( buf->index + 4 <= buf->size);
-    #ifdef BIG_ENDIAN
-        *((uint32_t*)(buf->data + buf->index)) = bswap( value ); 
-    #else // #ifdef BIG_ENDIAN
-        *((uint32_t*)(buf->data + buf->index)) = value; 
-    #endif // #ifdef BIG_ENDIAN
-    buf->index += 4;
-}
-
-int readInteger(buffer * buf)
-{
-    assert(buf->index + 4 <= buf->size);
-
-    uint32_t value = *((uint32_t*)(buf->data + buf->index));
-    #ifdef BIG_ENDIAN
-        value = bswap(value)
-    #else // #ifdef BIG_ENDIAN
-       // Do nothing
-    #endif // #ifdef BIG_ENDIAN
-     
-    buf->index += 4;
-    return value;
-}
-
-void writeU8(buffer * buf, uint8_t value)
-{
-    assert( buf->index + 4 <= buf->size)
-    #ifdef BIG_ENDIAN
-        *((uint8_t*)(buf->data + buf->index)) = bswap(value);
-    #else
-        *((uint8_t*)(buf->data + buf->index)) = value;
-    #endif
 }

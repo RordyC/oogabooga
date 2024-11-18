@@ -1,5 +1,4 @@
 
-#include "networking.c"
 #define DEFAULT_PORT 7777
 
 #define MAX_KEYS_PER_BINDING 3
@@ -68,20 +67,6 @@ int entry(int argc, char **argv)
     int activeServer = 1;
     int activeClient = 1;
 
-    // Initialize WSA variables
-    if (argc == 2)
-    {
-        if (strcmp(argv[1], "server") == 0)
-        {
-
-        }
-        else if (strcmp(argv[1], "client") == 0)
-        {
-
-        }
-    }
-
-
     key_binds[ACTION_RED].codes[0]   = 'R';
     key_binds[ACTION_GREEN].codes[0] = 'G';
 	key_binds[ACTION_BLUE].codes[0]  = 'B';
@@ -97,7 +82,8 @@ int entry(int argc, char **argv)
 	
 	const u32 font_height = 48;
 	
-	while (!window.should_close) {
+    printf("random: %llu\n", generateSalt());
+    while (!window.should_close) {
 		reset_temporary_storage();
 		
 
@@ -107,44 +93,8 @@ int entry(int argc, char **argv)
 
         clientUpdate(&CLIENT, now);
         serverRecieve(&SERVER);
-        if (activeServer)
-        {
-            // Check if pending clients and send connection approved messages.
-
-        }
-
-
-        if (activeClient)
-        {
-            char packet1[128] = "Hello Server!";
-            char packet2[64] = "NETCHAD!!!";
-            unsigned char packet3[128];
-
-            buffer buf = {&packet3, sizeof(packet3), 0};
-
-            u16 protocol = 12;
-            u8 type = 1;
-
-            writeInteger(&buf, ProtocolID);
-            writeInteger(&buf, type);
-
-		    if (is_action_just_pressed(ACTION_RED))   
-            {
-                if (CLIENT.state == CLIENT_CONNECTED)
-                {
-                    //clientSend(clientSocket, packet1, 128, serverAddress);
-                }
-            }
-            if (is_action_just_pressed(ACTION_GREEN)) 
-            {
-                //clientSend(clientSocket, packet2, 64, serverAddress);
-            }
-            //if (is_action_just_pressed(ACTION_BLUE))  clientSend(clientSocket, buf.data, 128, serverAddress);
-        }
-
-
-
-		Matrix4 rect_xform = m4_scalar(1.0);
+		
+        Matrix4 rect_xform = m4_scalar(1.0);
 		rect_xform         = m4_rotate_z(rect_xform, (f32)now);
 		rect_xform         = m4_translate(rect_xform, v3(-125, -125, 0));
 		draw_rect_xform(rect_xform, v2(250, 250), COLOR_GREEN);
