@@ -9,6 +9,7 @@ typedef struct {
     SOCKET clientSocket;
     uint64_t clientSalt;
     uint64_t serverSalt;
+    uint32_t clientIndex;
     double time;
     double lastPacketSendTime;
     double lastPacketRecieveTime;
@@ -47,13 +48,48 @@ void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned
     PacketType type = *((u8*)payload);
     switch (type)
     {
-        case PACKET_CHALLENGE:
-            if (CLIENT->state == CLIENT_REQUESTING_CONNECTION && addressEqual(from, CLIENT->serverAddress))
+        case PACKET_REJECT:
+            if (CLIENT->state == CLIENT_REQUESTING_CONNECTION)
             {
+                CLIENT->state = CLIENT_DISCONNECTED;
+                printf("CLIENT: Connnection request rejected by server.\n");
+            }
+        case PACKET_CHALLENGE:
+            if (CLIENT->state == CLIENT_REQUESTING_CONNECTION)
+            {
+                uint64_t clientSalt = readU64(((u8*)payload) + 1);
+                uint64_t serverSalt = readU64(((u8*)payload) + 5);
 
+                if (clientSalt == CLIENT->clientSalt)
+                {
+                    CLIENT->serverSalt == serverSalt;
+                    // SEND CHALLENGE RESPONSE.
+                }
+                else
+                {
+                    printf("CLIENT: Received challenge packet with wrong client salt.\n");
+                }
             }
             break;
         case PACKET_HEARTBEAT:
+            if (CLIENT->state == CLIENT_SENDING_CHALLENGE_RESPONSE)
+            {
+                // Need to receive heartbeat packet with the client index before the client can transition to connected state.
+                uint64_t salts = readU64(((u8*)payload) + 1);
+                if (CLIENT->clientSalt ^ CLIENT->serverSalt == salts)
+                {
+                    CLIENT->clientIndex = 0; // TODO: Read client index.
+                    CLIENT->state == CLIENT_CONNECTED;
+                }
+                else
+                {
+                    printf("CLIENT: Received packet with incorrect salt values.\n");
+                }
+            }
+            else
+            {
+
+            }
             break;
         default:
             break;
@@ -113,7 +149,53 @@ void clientUpdate(client * CLIENT, double currentTime)
     }
 }
 
-void clientRecieve(client * CLIENT)
+void clientReceive(client * CLIENT)
 {
-       
+    while ( true )
+    {
+        unsigned char packetData[1024];
+        unsigned int maxPacketSize = sizeof(packetData);
+
+        struct sockaddr_in from;
+        int fromLength = sizeof(from);
+
+        int bytes = recvfrom(CLIENT->clientSocket, 
+                              (char*)packetData, 
+                              maxPacketSize,
+                              0, 
+                              (SOCKADDR*)&from, 
+                              &fromLength);
+
+        if ( bytes <= 0 )
+            break;
+
+        // Check protocol ID.
+        uint32_t protocol = ntohl(*(uint32_t*)&packetData[0]);
+        if (protocol == ProtocolID)
+        {
+            // Process packet.
+            unsigned long from_address = ntohl(from.sin_addr.s_addr);
+            unsigned int from_port = ntohs(from.sin_port);
+            address from = addressIPV4DD(from_address, from_port);
+
+            if (addressEqual(from, CLIENT->serverAddress))
+            {
+                printf("CLIENT: Received Packet of size (%d) from (%d.%d.%d.%d):%d\n",
+                    bytes,
+                    from.data.ipv4[0], from.data.ipv4[1], from.data.ipv4[2], from.data.ipv4[3],
+                    from_port);
+                CLIENT->lastPacketRecieveTime = CLIENT->time;
+                clientProcessPacket(CLIENT, from, (void*)&packetData[4], bytes - 4);
+            }
+            else
+            {
+                printf("CLIENT: Received packet from different server address.\n");
+            }
+        }
+        else
+        {
+            printf("CLIENT: Received packet with invalid protocolID.\n");
+        }
+    }
+
 }

@@ -10,12 +10,12 @@ const uint32_t ProtocolID = 0x27052004;
 
 typedef enum
 {
-    UNRELIABLE,
     CONNECT,
+    PACKET_REJECT,
     PACKET_CHALLENGE,
     PACKET_RESPONSE,
-    REJECT,
     PACKET_HEARTBEAT,
+    PACKET_PAYLOAD,
     DISCONNECT,
     NUM_PACKET_TYPES
 } PacketType;
