@@ -54,6 +54,12 @@ typedef struct{
 } pendingClientConnection;
 
 typedef struct {
+    bool isConnected;
+    double lastPacketReceivedTime;
+    address clientAddress;
+} serverClientSlot;
+
+typedef struct {
     double time;
     int maxClients;
     int numClientsConnected;
@@ -283,15 +289,15 @@ packet createChallengeResponsePacket(uint32_t protocolID, uint64_t salts)
     return (packet){PACKET_RESPONSE, buf.size, data};
 }
 
-packet createHeartbeatPacket(u32 protocolID, uint64_t salts)
+packet createHeartbeatPacket(u32 protocolID, uint64_t salts, uint32_t index)
 {
-    void * data = alloc(get_heap_allocator(), 13);
-    buffer buf = {data, 13, 0};
+    void * data = alloc(get_heap_allocator(), 17);
+    buffer buf = {data, 17, 0};
 
     writeU32(&buf, protocolID);      // TODO: CRC32
     writeU8(&buf, PACKET_HEARTBEAT); // Packet Type
     writeU64(&buf, salts);           // XOR of client and server salts
-
+    writeU32(&buf, index);
     return (packet){PACKET_HEARTBEAT, buf.size, data};
 }
 
@@ -326,7 +332,29 @@ void serverCheckPendingConnectionsTimeout(server * SERVER)
 
 void serverProcessChallengeResponsePacket(server * SERVER, address from, void * payload, unsigned int size)
 {
-    // TODO:
+    uint64_t salts = readU64((u8*)payload + 1);
+    pendingClientConnection * pendingConn = null;
+    for (int i = 0; i < SERVER->pendingConnectionsCount; i++)
+    {
+        if (addressEqual(SERVER->pendingConnections[i].clientAddress, from))
+        {
+            pendingConn = &SERVER->pendingConnections[i];
+        }
+    }
+
+    if (!pendingConn)
+    {
+        printf("SERVER: Pending connection with matching address could not be found.\n");
+        return;
+    }
+
+    if ((pendingConn->clientSalt ^ pendingConn->serverSalt) != salts)
+    {
+        printf("SERVER: Pending connection salt values not not match.\n");
+        return;
+    }
+    
+    // Pending client can be connected.
     for (int i = 0; i < SERVER->maxClients; i++)
     {
         if (!SERVER->isClientConnected[i])
@@ -335,9 +363,14 @@ void serverProcessChallengeResponsePacket(server * SERVER, address from, void * 
             SERVER->clientsAddress[i] = from;
             SERVER->numClientsConnected++;
             printf("SERVER: Client connected at index: (%d)\n", i);
-            // SEND ACCEPT PACKET!!!!
+            // TODO: Send heartbeat packet.
+            // TODO: Remove pending connection.
+            return;
         }
     }
+
+    printf("SERVER: Could not find available slot to connect client.\n");
+    // TODO: Send connection rejected packet.
 }
 
 void serverProcessConnectPacket(server * SERVER, address from, void * payload, unsigned int size)

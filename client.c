@@ -1,3 +1,5 @@
+#define HEARTBEAT_SEND_RATE 0.1
+
 typedef enum {
    CLIENT_DISCONNECTED,
    CLIENT_REQUESTING_CONNECTION,
@@ -49,7 +51,7 @@ void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned
     switch (type)
     {
         case PACKET_REJECT:
-            if (CLIENT->state == CLIENT_REQUESTING_CONNECTION)
+            if (CLIENT->state == CLIENT_REQUESTING_CONNECTION || CLIENT->state == CLIENT_SENDING_CHALLENGE_RESPONSE)
             {
                 CLIENT->state = CLIENT_DISCONNECTED;
                 printf("CLIENT: Connnection request rejected by server.\n");
@@ -62,7 +64,7 @@ void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned
 
                 if (clientSalt == CLIENT->clientSalt)
                 {
-                    CLIENT->serverSalt == serverSalt;
+                    CLIENT->serverSalt = serverSalt;
                     // SEND CHALLENGE RESPONSE.
                 }
                 else
@@ -76,10 +78,10 @@ void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned
             {
                 // Need to receive heartbeat packet with the client index before the client can transition to connected state.
                 uint64_t salts = readU64(((u8*)payload) + 1);
-                if (CLIENT->clientSalt ^ CLIENT->serverSalt == salts)
+                if ((CLIENT->clientSalt ^ CLIENT->serverSalt) == salts)
                 {
                     CLIENT->clientIndex = 0; // TODO: Read client index.
-                    CLIENT->state == CLIENT_CONNECTED;
+                    CLIENT->state = CLIENT_CONNECTED;
                 }
                 else
                 {
@@ -142,7 +144,10 @@ void clientUpdate(client * CLIENT, double currentTime)
         case CLIENT_DISCONNECTED:
             break;
         case CLIENT_CONNECTED:
-            // DO STUFF
+            if (CLIENT->time - CLIENT->lastPacketSendTime > HEARTBEAT_SEND_RATE)
+            {
+                // TODO: Send heartbeat packet.
+            }
             break;
         default:
             break;
