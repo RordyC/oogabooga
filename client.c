@@ -60,12 +60,17 @@ void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned
             if (CLIENT->state == CLIENT_REQUESTING_CONNECTION)
             {
                 uint64_t clientSalt = readU64(((u8*)payload) + 1);
-                uint64_t serverSalt = readU64(((u8*)payload) + 5);
+                uint64_t serverSalt = readU64(((u8*)payload) + 1 + 8);
 
                 if (clientSalt == CLIENT->clientSalt)
                 {
                     CLIENT->serverSalt = serverSalt;
-                    // SEND CHALLENGE RESPONSE.
+                    CLIENT->state = CLIENT_SENDING_CHALLENGE_RESPONSE;
+                    printf("CLIENT: Sending challenge response.\n");
+                    packet challengeResponse = createChallengeResponsePacket(ProtocolID, CLIENT->serverSalt ^ CLIENT->clientSalt);
+                    socketSend(CLIENT->clientSocket, challengeResponse.data, challengeResponse.size, CLIENT->serverAddress);
+                    CLIENT->lastPacketSendTime = CLIENT->time;
+                    dealloc(get_heap_allocator(), challengeResponse.data);
                 }
                 else
                 {
@@ -77,11 +82,14 @@ void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned
             if (CLIENT->state == CLIENT_SENDING_CHALLENGE_RESPONSE)
             {
                 // Need to receive heartbeat packet with the client index before the client can transition to connected state.
-                uint64_t salts = readU64(((u8*)payload) + 1);
+                uint64_t salts = readU64((u8*)payload + 1);
+                uint32_t index = readU32((u8*)payload + 1 + 8);
+
                 if ((CLIENT->clientSalt ^ CLIENT->serverSalt) == salts)
                 {
                     CLIENT->clientIndex = 0; // TODO: Read client index.
                     CLIENT->state = CLIENT_CONNECTED;
+                    printf("CLIENT: Client connected!\n");
                 }
                 else
                 {
@@ -91,62 +99,6 @@ void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned
             else
             {
 
-            }
-            break;
-        default:
-            break;
-    }
-}
-
-void clientUpdate(client * CLIENT, double currentTime)
-{
-    CLIENT->time = currentTime; 
-    // clientReceive(CLIENT);
-    switch (CLIENT->state)
-    {
-        case CLIENT_REQUESTING_CONNECTION:
-            // Check if time since last packet is greater than connection request resend rate.
-            if ((CLIENT->time - CLIENT->lastPacketRecieveTime) > 5.0)
-            {
-               clientTimeout(CLIENT); 
-            }
-
-            // Keep sending request packets.
-            if (CLIENT->time - CLIENT->lastPacketSendTime >= 0.1)
-            {
-                CLIENT->lastPacketSendTime = CLIENT->time;
-                packet packet = createConnectionRequestPacket(ProtocolID, CLIENT->clientSalt);
-
-                printf("CLIENT: Sending Request Packet to Server.\n");
-
-                socketSend(CLIENT->clientSocket, packet.data, packet.size, CLIENT->serverAddress);
-                dealloc(get_heap_allocator(), packet.data);
-            }
-            break;
-        case CLIENT_SENDING_CHALLENGE_RESPONSE:
-            if ((CLIENT->time - CLIENT->lastPacketRecieveTime) > 5.0)
-            {
-               clientTimeout(CLIENT); 
-            }
-
-            if (CLIENT->time - CLIENT->lastPacketSendTime >= 0.1)
-            {
-                // send packet again!
-                CLIENT->lastPacketSendTime = CLIENT->time;
-                packet response = createChallengeResponsePacket(ProtocolID, CLIENT->clientSalt ^ CLIENT->serverSalt);
-
-                printf("CLIENT: Sending Challenge Response Packet to Server.\n");
-
-                socketSend(CLIENT->clientSocket, response.data, response.size, CLIENT->serverAddress);
-                dealloc(get_heap_allocator(), response.data);
-            }
-            break;
-        case CLIENT_DISCONNECTED:
-            break;
-        case CLIENT_CONNECTED:
-            if (CLIENT->time - CLIENT->lastPacketSendTime > HEARTBEAT_SEND_RATE)
-            {
-                // TODO: Send heartbeat packet.
             }
             break;
         default:
@@ -203,4 +155,65 @@ void clientReceive(client * CLIENT)
         }
     }
 
+}
+
+void clientUpdate(client * CLIENT, double currentTime)
+{
+    CLIENT->time = currentTime; 
+    clientReceive(CLIENT);
+    switch (CLIENT->state)
+    {
+        case CLIENT_REQUESTING_CONNECTION:
+            // Check if time since last packet is greater than connection request resend rate.
+            if ((CLIENT->time - CLIENT->lastPacketRecieveTime) > 5.0)
+            {
+               clientTimeout(CLIENT); 
+            }
+
+            // Keep sending request packets.
+            if (CLIENT->time - CLIENT->lastPacketSendTime >= 0.1)
+            {
+                CLIENT->lastPacketSendTime = CLIENT->time;
+                packet packet = createConnectionRequestPacket(ProtocolID, CLIENT->clientSalt);
+
+                printf("CLIENT: Sending Request Packet to Server.\n");
+
+                socketSend(CLIENT->clientSocket, packet.data, packet.size, CLIENT->serverAddress);
+                dealloc(get_heap_allocator(), packet.data);
+            }
+            break;
+        case CLIENT_SENDING_CHALLENGE_RESPONSE:
+            if ((CLIENT->time - CLIENT->lastPacketRecieveTime) > 5.0)
+            {
+               clientTimeout(CLIENT); 
+            }
+
+            if (CLIENT->time - CLIENT->lastPacketSendTime >= 0.1)
+            {
+                // send packet again!
+                CLIENT->lastPacketSendTime = CLIENT->time;
+                packet response = createChallengeResponsePacket(ProtocolID, CLIENT->clientSalt ^ CLIENT->serverSalt);
+
+                printf("CLIENT: Sending Challenge Response Packet to Server.\n");
+
+                socketSend(CLIENT->clientSocket, response.data, response.size, CLIENT->serverAddress);
+                dealloc(get_heap_allocator(), response.data);
+            }
+            break;
+        case CLIENT_DISCONNECTED:
+            break;
+        case CLIENT_CONNECTED:
+            if ((CLIENT->time - CLIENT->lastPacketRecieveTime) > 5.0)
+            {
+               // clientTimeout(CLIENT); 
+            }
+
+            if (CLIENT->time - CLIENT->lastPacketSendTime > HEARTBEAT_SEND_RATE)
+            {
+                // TODO: Send heartbeat packet.
+            }
+            break;
+        default:
+            break;
+    }
 }

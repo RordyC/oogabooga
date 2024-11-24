@@ -6,7 +6,7 @@
             "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/cgame.exe", // Run the output executable after compile
-            "args": [],
+            "args": ["-c"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],
@@ -18,7 +18,7 @@
             "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/release/cgame.exe", // Run the output executable after compile
-            "args": [],
+            "args": ["-c"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],

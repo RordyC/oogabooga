@@ -29,10 +29,33 @@ bool is_action_just_pressed(Action action) {
 	return false;
 }
 
-
-
 int entry(int argc, char **argv)
 {
+
+    if (argc < 2){
+        printf("Must specify client or server with -c or -s arguments on run.\n");
+        return -1;
+    }
+
+    if (strlen(argv[1]) == 2)
+    {
+        char dash, startMode;
+        dash = argv[1][0];
+        startMode = argv[1][1];
+        if (dash == '-')
+        {
+            if (startMode == 'c')
+            {
+                printf("Running Program as Client.\n");
+            }
+            else if (startMode == 's')
+            {
+
+                printf("Running Program as Server.\n");
+            }
+        }
+    }
+
 	WSADATA wsaData;
     int wsaerr;
     // Request latest version (2.2)
@@ -64,8 +87,6 @@ int entry(int argc, char **argv)
     client CLIENT;
     CLIENT = startClient(clientAddress);
     clientConnect(&CLIENT, serverAddress);
-    int activeServer = 1;
-    int activeClient = 1;
 
     key_binds[ACTION_RED].codes[0]   = 'R';
     key_binds[ACTION_GREEN].codes[0] = 'G';
@@ -82,7 +103,6 @@ int entry(int argc, char **argv)
 	
 	const u32 font_height = 48;
 	
-    printf("random: %llu\n", generateSalt());
     while (!window.should_close) {
 		reset_temporary_storage();
 		
@@ -92,7 +112,7 @@ int entry(int argc, char **argv)
         currentTime = now;
 
         clientUpdate(&CLIENT, now);
-        serverRecieve(&SERVER);
+        serverUpdate(&SERVER, now);
 		
         Matrix4 rect_xform = m4_scalar(1.0);
 		rect_xform         = m4_rotate_z(rect_xform, (f32)now);

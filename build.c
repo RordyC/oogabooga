@@ -53,7 +53,7 @@ typedef struct Context_Extra {
 // #include "oogabooga/examples/window_test.c"
 // #include "oogabooga/examples/offscreen_drawing.c"
 // #include "oogabooga/examples/threaded_drawing.c"
-//#include "oogabooga/examples/bloom.c"
+// #include "oogabooga/examples/bloom.c"
 #include "networking.c"
 #include "client.c"
 #include "game.c"

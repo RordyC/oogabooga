@@ -2,7 +2,7 @@ typedef enum { ADDRESS_IPV4, ADDRESS_IPV6, ADDRESS_INVALID} addressType;
 
 typedef struct {
     addressType type;
-    union {uint8_t ipv4[4]; uint16_t ipv6[8];} data;
+    union {uint8_t ipv4[4]; uint16_t ipv6[8]; uint64_t l;} data;
     unsigned short port;
 } address;
 
@@ -57,6 +57,8 @@ typedef struct {
     bool isConnected;
     double lastPacketReceivedTime;
     address clientAddress;
+    uint64_t clientSalt;
+    uint64_t challengeSalt;
 } serverClientSlot;
 
 typedef struct {
@@ -64,8 +66,10 @@ typedef struct {
     int maxClients;
     int numClientsConnected;
     bool isClientConnected[MAX_CLIENTS];
-    double clientsLastPacketRecievedTime[MAX_CLIENTS];
+    double clientsLastPacketReceivedTime[MAX_CLIENTS];
     address clientsAddress[MAX_CLIENTS];
+    uint64_t clientSalts[MAX_CLIENTS];
+    uint64_t challengeSalts[MAX_CLIENTS];
     pendingClientConnection pendingConnections[MAX_CLIENTS];
     int pendingConnectionsCount;
     address serverAddress;
@@ -120,6 +124,47 @@ SOCKET createSocketUDP(address addr)
 
     return newSocket;
  
+}
+
+address getLocalAddress(unsigned short port)
+{
+    address localAddr;
+    char hostname[255];
+    gethostname(hostname, sizeof hostname);
+    char ipString[INET6_ADDRSTRLEN];
+    ADDRINFOA hints, *addr;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    if (getaddrinfo(hostname, NULL, &hints, &addr) != 0)
+    {
+        // COOKED
+        printf("Failed to get local address.\n");
+        return (address){ADDRESS_INVALID, {0,0,0,0}, 0};
+    }
+
+    for (struct addrinfo * p = addr; p != NULL; p = p->ai_next)
+    {
+        if (p->ai_family == AF_INET)
+        {
+            localAddr.type = ADDRESS_IPV4;
+            localAddr.port = port;
+
+            struct sockaddr_in * ipv4 = (struct sockaddr_in*)p->ai_addr;
+            inet_ntop(p->ai_family, &ipv4->sin_addr, ipString, sizeof(ipString));
+            printf("Address: %s\n", ipString);
+        }
+        else if (p->ai_family == AF_INET6)
+        {
+            localAddr.type = ADDRESS_IPV6;
+            localAddr.port = port;
+            struct sockaddr_in6 * ipv6 = (struct sockaddr_in6*)p->ai_addr;
+            inet_ntop(p->ai_family, &(ipv6->sin6_addr), ipString, sizeof(ipString));
+            printf("Address: %s\n", ipString);
+        }
+    }
+    return localAddr;
 }
 
 address addressIPV4(char * addressStr, unsigned short port)
@@ -211,11 +256,6 @@ int readInteger(buffer * buf)
     assert(buf->index + 4 <= buf->size);
 
     uint32_t value = *((uint32_t*)(buf->data + buf->index));
-    #ifdef BIG_ENDIAN
-        value = bswap(value)
-    #else // #ifdef BIG_ENDIAN
-       // Do nothing
-    #endif // #ifdef BIG_ENDIAN
      
     buf->index += 4;
     return value;
@@ -230,15 +270,19 @@ void writeU8(buffer * buf, uint8_t value)
 
 void writeU64(buffer * buf, uint64_t value)
 {
-    htonl(0);
     assert( buf->index + sizeof(uint64_t) <= buf->size)
     *((uint64_t*)(buf->data + buf->index)) = htonll(value);
     buf->index += sizeof(uint64_t);
 }
 
+uint32_t readU32(void * data)
+{
+    return ntohl(*((uint32_t*)(data)));
+}
+
 u_int64 readU64(void * data)
 {
-    return ntohll(*((uint64_t*)((u8*)data)));
+    return ntohll(*((uint64_t*)(data)));
 }
 
 packet createConnectionRequestPacket(u32 protocolID, uint64_t clientSalt)
@@ -312,6 +356,23 @@ int serverFindClientIndex(server * server, address addr)
     }
     return -1;
 }
+
+// Returns the index
+int serverFindEmptyClientSlot(server * SERVER)
+{
+    for (int i = 0; i < SERVER->maxClients; i++)
+    {
+        if (!SERVER->isClientConnected[i])
+        {
+            assert(SERVER->numClientsConnected != SERVER->maxClients);
+            return i;
+        }
+    }
+    // Server must be full.
+    assert(SERVER->numClientsConnected == SERVER->maxClients);
+    return -1;
+}
+
 #define SERVER_CONNECTION_TIMEOUT_TIME 4
 void serverCheckPendingConnectionsTimeout(server * SERVER)
 {
@@ -333,12 +394,29 @@ void serverCheckPendingConnectionsTimeout(server * SERVER)
 void serverProcessChallengeResponsePacket(server * SERVER, address from, void * payload, unsigned int size)
 {
     uint64_t salts = readU64((u8*)payload + 1);
+
+    int existingClientIndex = serverFindClientIndex(SERVER, from);
+
+    if (existingClientIndex >= 0)
+    {
+        printf("SERVER: Client already connected. Sending heartbeat packet.\n");
+        
+        packet heartbeatPacket = createHeartbeatPacket(ProtocolID,
+                                 SERVER->clientSalts[existingClientIndex] ^ SERVER->challengeSalts[existingClientIndex],
+                                 existingClientIndex);
+        socketSend(SERVER->serverSocket, heartbeatPacket.data, heartbeatPacket.size, SERVER->clientsAddress[existingClientIndex]);
+        dealloc(get_heap_allocator(),heartbeatPacket.data);
+        return;
+    }
+
     pendingClientConnection * pendingConn = null;
+    int pendingConnIndex;
     for (int i = 0; i < SERVER->pendingConnectionsCount; i++)
     {
         if (addressEqual(SERVER->pendingConnections[i].clientAddress, from))
         {
             pendingConn = &SERVER->pendingConnections[i];
+            pendingConnIndex = i;
         }
     }
 
@@ -355,22 +433,31 @@ void serverProcessChallengeResponsePacket(server * SERVER, address from, void * 
     }
     
     // Pending client can be connected.
-    for (int i = 0; i < SERVER->maxClients; i++)
+    int clientSlot = serverFindEmptyClientSlot(SERVER);
+    if (clientSlot == -1)
     {
-        if (!SERVER->isClientConnected[i])
-        {
-            SERVER->isClientConnected[i] = 1;
-            SERVER->clientsAddress[i] = from;
-            SERVER->numClientsConnected++;
-            printf("SERVER: Client connected at index: (%d)\n", i);
-            // TODO: Send heartbeat packet.
-            // TODO: Remove pending connection.
-            return;
-        }
+        printf("SERVER: Could not find available slot to connect client (server full). Sending connection rejected packet.\n");
+        // TODO: Send connection rejected packet.
+        return;
     }
 
-    printf("SERVER: Could not find available slot to connect client.\n");
-    // TODO: Send connection rejected packet.
+    SERVER->isClientConnected[clientSlot] = 1;
+    SERVER->clientsAddress[clientSlot] = from;
+    SERVER->clientSalts[clientSlot] = pendingConn->clientSalt;
+    SERVER->challengeSalts[clientSlot] = pendingConn->serverSalt;
+    SERVER->clientsLastPacketReceivedTime[clientSlot] = SERVER->time;
+    SERVER->numClientsConnected++;
+
+    // Remove pending connection.
+    SERVER->pendingConnectionsCount--;
+    for (int i = pendingConnIndex; i < SERVER->pendingConnectionsCount; i++)
+    {
+        SERVER->pendingConnections[i] = SERVER->pendingConnections[i + 1];
+    }
+
+    printf("SERVER: Client connected at index: (%d)\n", clientSlot);
+    // TODO: Send heartbeat packet.
+    // TODO: Remove pending connection.
 }
 
 void serverProcessConnectPacket(server * SERVER, address from, void * payload, unsigned int size)
@@ -441,35 +528,15 @@ void serverProcessPacket(server * server, address from, void * payload, unsigned
             serverProcessConnectPacket(server, from, payload, size);
             break;
         case PACKET_RESPONSE:
-            // Process connection response packet:
-            uint64_t clientSalt = readU64((u8*)payload + 1);
-            uint64_t serverSalt = readU64((u8*)payload + 1 + 8);
-
-            // Check if already connected
-            int index = serverFindClientIndex(server, from);
-            if (index >= 0)
-            {
-                printf("SERVER: Client (%d) already connected, resending connection accepted packet.\n", index);
-                // Send connection denied (already connected) packet.
-            };
-
-            for (int i = 0; i < server->pendingConnectionsCount; i++)
-            {
-                pendingClientConnection * pendingConn = &server->pendingConnections[i];
-                if (addressEqual(pendingConn->clientAddress, from) && pendingConn->clientSalt == clientSalt && pendingConn->serverSalt == serverSalt)
-                {
-                    // SEND CONNECTION ACCEPTED PACKET FINALLY.
-                    // remove pending conn from thing.
-                }
-            }
+            serverProcessChallengeResponsePacket(server, from, payload, size);
             break;
         default:
-            printf("SERVER: Invalid packet type recieved.\n", index);
+            printf("SERVER: Invalid packet type recieved.\n");
             break;
     }
 }
 
-void serverRecieve(server * Server)
+void serverReceive(server * Server)
 {
     while ( true )
     {
@@ -504,8 +571,6 @@ void serverRecieve(server * Server)
                 from_port);
 
             serverProcessPacket(Server, from, (void*)&packetData[4], bytes - 4);
-            // Check packet is from connected client.
-            // process packet
         }
     }
 }
@@ -525,7 +590,15 @@ server startServer(address serverAddress, unsigned int maxConnections)
 
 void serverUpdate(server * SERVER, double time)
 {
-    serverCheckPendingConnectionsTimeout(SERVER);
-    
-    serverRecieve(SERVER);
+    // serverCheckPendingConnectionsTimeout(SERVER);
+    serverReceive(SERVER);
+
+    for (int i = 0; i < SERVER->maxClients; i++)
+    {
+        if (SERVER->isClientConnected[i] && (SERVER->time - SERVER->clientsLastPacketReceivedTime[i]) > 5.0)
+        {
+            SERVER->isClientConnected[i] = 0;
+            printf("SERVER: Client at index (%d) timed out. Sending disconnect packets.\n", i);
+        }
+    }    
 }
