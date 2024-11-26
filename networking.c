@@ -1,3 +1,37 @@
+void windowsLogConsole(int isServer, const char * fmt, ...)
+{
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (isServer)
+    {
+        SetConsoleTextAttribute(hConsole, 0xC);
+        printf("[SERVER]: ");
+    }
+    else
+    {
+        SetConsoleTextAttribute(hConsole, 0x9);
+        printf("[CLIENT]: ");
+    }
+    SetConsoleTextAttribute(hConsole, 0x7);
+
+    char message[4096];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
+    printf("%s\n", message);
+}
+
+
+#ifndef LOG_SERVER
+#define LOG_SERVER(message, ...) windowsLogConsole(1, message, __VA_ARGS__)
+#endif
+
+#ifndef LOG_CLIENT
+#define LOG_CLIENT(message, ...) windowsLogConsole(0, message, __VA_ARGS__)
+#endif
+
+#define freefunction(data) dealloc(get_heap_allocator(), (void*)data)
+
 typedef enum { ADDRESS_IPV4, ADDRESS_IPV6, ADDRESS_INVALID} addressType;
 
 typedef struct {
@@ -67,6 +101,7 @@ typedef struct {
     int numClientsConnected;
     bool isClientConnected[MAX_CLIENTS];
     double clientsLastPacketReceivedTime[MAX_CLIENTS];
+    double clientsLastPacketSendTime[MAX_CLIENTS];
     address clientsAddress[MAX_CLIENTS];
     uint64_t clientSalts[MAX_CLIENTS];
     uint64_t challengeSalts[MAX_CLIENTS];
@@ -76,10 +111,34 @@ typedef struct {
     SOCKET serverSocket;
 } server;
 
+int networkingInitialize()
+{
+    // Windows Setup ---------
+	WSADATA wsaData;
+    int wsaerr;
+    // Request latest version (2.2)
+    WORD wVersionRequested = MAKEWORD(2, 2); // A 16-bit unsigned integer. The range is 0 through 65535 decimal.
+    wsaerr = WSAStartup(wVersionRequested, &wsaData);
+    if (wsaerr != 0)
+    {
+        printf("WSAStartup failed: %d\n", wsaerr);
+        return 1;
+    }
+    else
+    {
+        printf("WSAStartup success.\n");
+        return 0;
+    }
+}
+
+void networkingShutdown()
+{
+    // Clean up Windows 
+    WSACleanup();
+}
+
 SOCKET createSocketUDP(address addr)
 {
-    printf("Creating UDP  Socket\n");
-
     SOCKET newSocket = INVALID_SOCKET;
 
     // Create a SOCKET for the server to listen for client connections
@@ -362,7 +421,8 @@ int serverFindEmptyClientSlot(server * SERVER)
 {
     for (int i = 0; i < SERVER->maxClients; i++)
     {
-        if (!SERVER->isClientConnected[i])
+        int clientConnected = SERVER->isClientConnected[i];
+        if (!clientConnected)
         {
             assert(SERVER->numClientsConnected != SERVER->maxClients);
             return i;
@@ -405,6 +465,7 @@ void serverProcessChallengeResponsePacket(server * SERVER, address from, void * 
                                  SERVER->clientSalts[existingClientIndex] ^ SERVER->challengeSalts[existingClientIndex],
                                  existingClientIndex);
         socketSend(SERVER->serverSocket, heartbeatPacket.data, heartbeatPacket.size, SERVER->clientsAddress[existingClientIndex]);
+        SERVER->clientsLastPacketSendTime[existingClientIndex] = SERVER->time;
         dealloc(get_heap_allocator(),heartbeatPacket.data);
         return;
     }
@@ -446,6 +507,7 @@ void serverProcessChallengeResponsePacket(server * SERVER, address from, void * 
     SERVER->clientSalts[clientSlot] = pendingConn->clientSalt;
     SERVER->challengeSalts[clientSlot] = pendingConn->serverSalt;
     SERVER->clientsLastPacketReceivedTime[clientSlot] = SERVER->time;
+    SERVER->clientsLastPacketSendTime[clientSlot] = SERVER->time;
     SERVER->numClientsConnected++;
 
     // Remove pending connection.
@@ -455,9 +517,8 @@ void serverProcessChallengeResponsePacket(server * SERVER, address from, void * 
         SERVER->pendingConnections[i] = SERVER->pendingConnections[i + 1];
     }
 
-    printf("SERVER: Client connected at index: (%d)\n", clientSlot);
+    LOG_SERVER("Client connected at index: (%d)", clientSlot);
     // TODO: Send heartbeat packet.
-    // TODO: Remove pending connection.
 }
 
 void serverProcessConnectPacket(server * SERVER, address from, void * payload, unsigned int size)
@@ -466,6 +527,11 @@ void serverProcessConnectPacket(server * SERVER, address from, void * payload, u
            from.data.ipv4[0], from.data.ipv4[1], from.data.ipv4[2], from.data.ipv4[3],
            from.port);
 
+    if (size != 508)
+    {
+        printf("SERVER: Received CONNECT Packet of incorrect size.\n");
+        return;
+    }
     // Check if client is already connected.
     int existingClientIndex = serverFindClientIndex(SERVER, from);
     if (existingClientIndex >= 0)
@@ -493,7 +559,7 @@ void serverProcessConnectPacket(server * SERVER, address from, void * payload, u
                 printf("SERVER: Resending challenge packet.\n");
                 packet challengePacket = createServerChallengePacket(ProtocolID, pendingConn->clientSalt, pendingConn->serverSalt);
                 socketSend(SERVER->serverSocket, challengePacket.data, challengePacket.size, pendingConn->clientAddress);
-                dealloc(get_heap_allocator(), challengePacket.data);
+                freefunction(challengePacket.data);
                 return;
             }
         }
@@ -531,7 +597,7 @@ void serverProcessPacket(server * server, address from, void * payload, unsigned
             serverProcessChallengeResponsePacket(server, from, payload, size);
             break;
         default:
-            printf("SERVER: Invalid packet type recieved.\n");
+            LOG_SERVER("Invalid packet type recieved.");
             break;
     }
 }
@@ -565,7 +631,7 @@ void serverReceive(server * Server)
             unsigned int from_port = ntohs( from.sin_port );
             address from = addressIPV4DD(from_address, from_port);
 
-            printf("SERVER: Received Packet of size (%d) from (%d.%d.%d.%d):%d\n",
+            LOG_SERVER("Received Packet of size (%d) from (%d.%d.%d.%d):%d",
                 bytes,
                 from.data.ipv4[0], from.data.ipv4[1], from.data.ipv4[2], from.data.ipv4[3],
                 from_port);
@@ -577,28 +643,33 @@ void serverReceive(server * Server)
 
 server startServer(address serverAddress, unsigned int maxConnections)
 {
-    server newServer;
-    
+    server newServer = {0};
     newServer.numClientsConnected = 0;
+    newServer.pendingConnectionsCount = 0;
+
     newServer.maxClients = maxConnections;
     newServer.serverAddress = serverAddress;
+
     newServer.serverSocket = createSocketUDP(serverAddress);
     newServer.pendingConnectionsCount = 0;
-    printf("SERVER STARTED.\n");
     return newServer;
 }
 
 void serverUpdate(server * SERVER, double time)
 {
+    SERVER->time = time;
     // serverCheckPendingConnectionsTimeout(SERVER);
     serverReceive(SERVER);
 
+    // Send payload messages every update rate.
+
+    // Check for client timeout
     for (int i = 0; i < SERVER->maxClients; i++)
     {
         if (SERVER->isClientConnected[i] && (SERVER->time - SERVER->clientsLastPacketReceivedTime[i]) > 5.0)
         {
             SERVER->isClientConnected[i] = 0;
-            printf("SERVER: Client at index (%d) timed out. Sending disconnect packets.\n", i);
+            LOG_SERVER("Client at index (%d) timed out. Sending disconnect packets.", i);
         }
     }    
 }

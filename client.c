@@ -25,7 +25,13 @@ client startClient(address clientAddress)
     newClient.clientSocket = createSocketUDP(clientAddress);
     newClient.state = CLIENT_DISCONNECTED;
 
-    printf("CLIENT STARTED.\n");
+    if (newClient.clientSocket != INVALID_SOCKET)
+    {
+        LOG_CLIENT("Client started.");
+        return newClient;
+    }
+
+    printf("Client creation failed.\n");
     return newClient;
 }
 
@@ -42,7 +48,7 @@ void clientConnect(client * CLIENT, address serverAddress)
 void clientTimeout(client * CLIENT)
 {
     CLIENT->state = CLIENT_DISCONNECTED;
-    printf("CLIENT TIMED OUT.\n");
+    LOG_CLIENT("Connection timed out");
 }
 
 void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned int size)
@@ -89,7 +95,7 @@ void clientProcessPacket(client * CLIENT, address from, void * payload, unsigned
                 {
                     CLIENT->clientIndex = 0; // TODO: Read client index.
                     CLIENT->state = CLIENT_CONNECTED;
-                    printf("CLIENT: Client connected!\n");
+                    LOG_CLIENT("Client connected!");
                 }
                 else
                 {
@@ -125,7 +131,7 @@ void clientReceive(client * CLIENT)
 
         if ( bytes <= 0 )
             break;
-
+            
         // Check protocol ID.
         uint32_t protocol = ntohl(*(uint32_t*)&packetData[0]);
         if (protocol == ProtocolID)
@@ -205,7 +211,7 @@ void clientUpdate(client * CLIENT, double currentTime)
         case CLIENT_CONNECTED:
             if ((CLIENT->time - CLIENT->lastPacketRecieveTime) > 5.0)
             {
-               // clientTimeout(CLIENT); 
+               clientTimeout(CLIENT); 
             }
 
             if (CLIENT->time - CLIENT->lastPacketSendTime > HEARTBEAT_SEND_RATE)
