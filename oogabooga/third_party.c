@@ -145,7 +145,6 @@ size_t stbtt_strlen(const char* str) {
 #define STBTT_memset memset
 #include "third_party/stb_truetype.h"
 
-
 #define STBI_NO_STDIO
 #define STBI_ASSERT(x) {if (!(x)) *(volatile char*)0 = 0;}
 #define STBI_MALLOC(sz)           third_party_malloc(sz)
@@ -160,3 +159,11 @@ size_t stbtt_strlen(const char* str) {
 #undef C
 #undef L
 
+#define PORTAL_PRINT(fmt, ...) printf(fmt, __VA_ARGS__)
+#define PORTAL_VSNPRINTF(buf, size, fmt, args) vsnprintf(buf, size, fmt, args)
+
+#define PORTAL_MALLOC(x)  third_party_malloc(x)
+#define PORTAL_FREE(x)      third_party_free(x)
+#define PORTAL_ASSERT
+
+//#include "third_party/library.h"

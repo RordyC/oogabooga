@@ -28,6 +28,10 @@ typedef struct Context_Extra {
 // This defaults to "entry", but we can set it to anything (except "main" or other existing proc names"
 #define ENTRY_PROC entry
 
+#ifdef _WIN32
+#include <winsock2.h> //NOTE(Rordon): Need to define ws2 before windows.h get defined.
+#endif
+
 // Ooga booga needs to be included AFTER configuration and BEFORE the program code
 #include "oogabooga/oogabooga.c"
 
@@ -39,7 +43,8 @@ typedef struct Context_Extra {
 // This is a minimal starting point for new projects. Copy & rename to get started
 // #include "oogabooga/examples/minimal_game_loop.c"
 
-// #include "oogabooga/examples/text_rendering.c"
+
+#include "oogabooga/examples/text_rendering.c"
 // #include "oogabooga/examples/custom_logger.c"
 // #include "oogabooga/examples/renderer_stress_test.c"
 // #include "oogabooga/examples/audio_test.c"
@@ -50,7 +55,7 @@ typedef struct Context_Extra {
 // #include "oogabooga/examples/window_test.c"
 // #include "oogabooga/examples/offscreen_drawing.c"
 // #include "oogabooga/examples/threaded_drawing.c"
-#include "oogabooga/examples/bloom.c"
+// #include "oogabooga/examples/bloom.c"
 
 // These examples require some extensions to be enabled. See top respective files for more info.
 // #include "oogabooga/examples/particles_example.c" // Requires OOGABOOGA_EXTENSION_PARTICLES
