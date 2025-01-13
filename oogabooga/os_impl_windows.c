@@ -2332,6 +2332,7 @@ Input_Key_Code os_key_to_key_code(void* os_key) {
         case VK_BACK:         return KEY_BACKSPACE;
         case VK_TAB:          return KEY_TAB;
         case VK_RETURN:       return KEY_ENTER;
+        case VK_OEM_PERIOD:   return KEY_PERIOD;
         case VK_ESCAPE:       return KEY_ESCAPE;
         case VK_SPACE:        return KEY_SPACEBAR;
         case VK_DELETE:       return KEY_DELETE;
@@ -2376,7 +2377,7 @@ void* key_code_to_os_key(Input_Key_Code key_code) {
 	if (key_code >= 'A' && key_code <= 'Z') {
         return (void*)key_code;
     }
-    if (key_code >= '0' && key_code <= '9') {
+    if (key_code >= '0' && key_code <= ':') {
         return (void*)key_code;
     }
 
@@ -2384,6 +2385,7 @@ void* key_code_to_os_key(Input_Key_Code key_code) {
         case KEY_BACKSPACE:       return (void*)VK_BACK;
         case KEY_TAB:             return (void*)VK_TAB;
         case KEY_ENTER:           return (void*)VK_RETURN;
+        case KEY_PERIOD:          return (void*)VK_OEM_PERIOD;
         case KEY_ESCAPE:          return (void*)VK_ESCAPE;
         case KEY_SPACEBAR:        return (void*)VK_SPACE;
         case KEY_DELETE:          return (void*)VK_DELETE;
