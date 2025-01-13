@@ -79,7 +79,7 @@ typedef enum Input_Key_Code {
     KEY_ENTER       = 13,
     KEY_ESCAPE      = 27,
     KEY_SPACEBAR    = 32,
-
+    KEY_PERIOD      = 46,
     // The letters A-Z live in here as well and may be returned
     // by keyboard events.
 

@@ -408,7 +408,10 @@ Draw_Quad *draw_image_xform_in_frame(Gfx_Image *image, Matrix4 xform, Vector2 si
 	
 	q->image = image;
 	q->uv = v4(0, 0, 1, 1);
-	
+
+    q->image_mag_filter = GFX_FILTER_MODE_LINEAR;
+    q->image_min_filter = GFX_FILTER_MODE_LINEAR;
+
 	return q;
 }
 
